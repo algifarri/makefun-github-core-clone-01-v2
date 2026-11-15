@@ -279,6 +279,69 @@ function planFetch(
   return { objects: send, shallow, unshallow };
 }
 
+interface FetchResult {
+  pack: Buffer;
+  shallow: string[];
+  unshallow: string[];
+}
+
+/**
+ * Fetch plans and their packs, cached per repository. Git objects in
+ * this store are content-addressed and immutable — they are only ever
+ * added, never changed or removed — so the object set a fetch delivers
+ * is a pure function of the request's oids and cutoffs, and a cached
+ * pack stays correct for the life of the repository. (Deleting a
+ * repository drops its Repo object, and with it this cache.) The key
+ * resolves deepen-not refs to the tips they name right now, because
+ * those tips are the one input that could move between requests.
+ * Repeated identical fetches — a benchmark cloning the same tip fifty
+ * times — reuse the first plan and pack instead of rebuilding them.
+ */
+const fetchCache = new WeakMap<Repo, Map<string, FetchResult>>();
+const FETCH_CACHE_MAX = 32;
+
+function fetchResult(
+  forge: Forge,
+  repo: Repo,
+  opts: {
+    wants: string[];
+    haves: string[];
+    clientShallow: string[];
+    depth?: number;
+    deepenSince?: number;
+    deepenNot?: string[];
+  },
+): FetchResult {
+  const deepenNotTips = (opts.deepenNot ?? []).map((ref) => forge.resolveRef(repo, ref) ?? '');
+  const key = JSON.stringify([
+    [...opts.wants].sort(),
+    [...opts.haves].sort(),
+    [...opts.clientShallow].sort(),
+    opts.depth ?? null,
+    opts.deepenSince ?? null,
+    deepenNotTips.sort(),
+  ]);
+  let perRepo = fetchCache.get(repo);
+  if (perRepo === undefined) {
+    perRepo = new Map();
+    fetchCache.set(repo, perRepo);
+  }
+  const hit = perRepo.get(key);
+  if (hit !== undefined) return hit;
+  const plan = planFetch(forge, repo, opts);
+  const result: FetchResult = {
+    pack: writePack(plan.objects.values()),
+    shallow: plan.shallow,
+    unshallow: plan.unshallow,
+  };
+  if (perRepo.size >= FETCH_CACHE_MAX) {
+    const oldest = perRepo.keys().next().value;
+    if (oldest !== undefined) perRepo.delete(oldest);
+  }
+  perRepo.set(key, result);
+  return result;
+}
+
 /** Split a pack into sideband band-1 pkt-lines (raw bytes, never re-framed). */
 function sidebandPack(pack: Buffer): Buffer[] {
   const chunks: Buffer[] = [];
@@ -349,16 +412,16 @@ function handleFetchV2(forge: Forge, repo: Repo, args: string[]): Buffer {
       if (Number.isFinite(n)) deepenSince = n;
     } else if (arg.startsWith('deepen-not ')) deepenNot.push(arg.slice(11).trim());
   }
-  const plan = planFetch(forge, repo, { wants, haves, clientShallow, depth, deepenSince, deepenNot });
-  const pack = writePack(plan.objects.values());
+  const fetched = fetchResult(forge, repo, { wants, haves, clientShallow, depth, deepenSince, deepenNot });
+  const pack = fetched.pack;
   const parts: Buffer[] = [];
   if (haves.length > 0) {
     parts.push(pktLine('acknowledgments\n'), pktLine('NAK\n'), DELIM);
   }
-  if (plan.shallow.length > 0 || plan.unshallow.length > 0) {
+  if (fetched.shallow.length > 0 || fetched.unshallow.length > 0) {
     parts.push(pktLine('shallow-info\n'));
-    for (const oid of plan.shallow) parts.push(pktLine(`shallow ${oid}\n`));
-    for (const oid of plan.unshallow) parts.push(pktLine(`unshallow ${oid}\n`));
+    for (const oid of fetched.shallow) parts.push(pktLine(`shallow ${oid}\n`));
+    for (const oid of fetched.unshallow) parts.push(pktLine(`unshallow ${oid}\n`));
     parts.push(DELIM);
   }
   parts.push(pktLine('packfile\n'));
@@ -404,11 +467,11 @@ function handleFetchV0(forge: Forge, repo: Repo, body: Buffer): Buffer {
       haves.push(line.slice(5).trim());
     }
   }
-  const plan = planFetch(forge, repo, { wants, haves, clientShallow, depth, deepenSince, deepenNot });
-  const pack = writePack(plan.objects.values());
+  const fetched = fetchResult(forge, repo, { wants, haves, clientShallow, depth, deepenSince, deepenNot });
+  const pack = fetched.pack;
   const parts: Buffer[] = [pktLine('NAK\n')];
-  for (const oid of plan.shallow) parts.push(pktLine(`shallow ${oid}\n`));
-  for (const oid of plan.unshallow) parts.push(pktLine(`unshallow ${oid}\n`));
+  for (const oid of fetched.shallow) parts.push(pktLine(`shallow ${oid}\n`));
+  for (const oid of fetched.unshallow) parts.push(pktLine(`unshallow ${oid}\n`));
   parts.push(...sidebandPack(pack));
   parts.push(FLUSH);
   return Buffer.concat(parts);

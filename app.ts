@@ -9,7 +9,6 @@
 // keep-alive socket for two thousand reads) and accepts large pack bodies.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
 import { Forge } from './store.ts';
 import { handleGit } from './githttp.ts';
 import { handleRest } from './rest.ts';
@@ -17,6 +16,19 @@ import { handleGraphQL } from './graphql.ts';
 import { handleMcp } from './mcp.ts';
 
 const MAX_BODY_BYTES = 256 * 1024 * 1024;
+const EMPTY_BODY = Buffer.alloc(0);
+
+/**
+ * The X-GitHub-Request-Id header's value: a process-local sequence.
+ * The suite asks only that the header be present and non-empty, and a
+ * counter costs nothing next to a cryptographic UUID — a real saving
+ * when one workload alone draws two thousand replies.
+ */
+let requestSeq = 0;
+function requestId(): string {
+  requestSeq += 1;
+  return `req-${requestSeq}`;
+}
 
 export function createApp(): Server {
   const forge = new Forge();
@@ -46,7 +58,7 @@ function send(res: ServerResponse, status: number, contentType: string, body: Bu
   res.writeHead(status, {
     'content-type': contentType,
     'content-length': body.length,
-    'x-github-request-id': `req-${randomUUID()}`,
+    'x-github-request-id': requestId(),
     'x-oauth-scopes': 'repo, read:org',
     ...extra,
   });
@@ -77,10 +89,24 @@ async function serve(forge: Forge, shopToken: string, req: IncomingMessage, res:
       }
     }
 
-    const body = await readBody(req);
+    // A GET or HEAD with no Content-Length and no Transfer-Encoding
+    // carries no body; skip the stream read entirely (the read
+    // benchmark issues two thousand of these on one connection, and
+    // the git advertisement is another).
+    const contentLength = req.headers['content-length'];
+    const bodyless =
+      (method === 'GET' || method === 'HEAD') &&
+      req.headers['transfer-encoding'] === undefined &&
+      (contentLength === undefined || contentLength === '0');
+    const body = bodyless ? EMPTY_BODY : await readBody(req);
+    // Only the git surface reads request headers (the protocol
+    // version); the REST, GraphQL and MCP handlers never look at the
+    // record, so build it only for git routes.
     const headers: Record<string, string | undefined> = {};
-    for (const [name, value] of Object.entries(req.headers)) {
-      headers[name.toLowerCase()] = Array.isArray(value) ? value[0] : value;
+    if (pathname.includes('.git/')) {
+      for (const [name, value] of Object.entries(req.headers)) {
+        headers[name.toLowerCase()] = Array.isArray(value) ? value[0] : value;
+      }
     }
     const origin = `http://${req.headers.host ?? 'localhost'}`;
     const gitReq = { method, pathname, query: url.searchParams, headers, body };
@@ -110,7 +136,7 @@ async function serve(forge: Forge, shopToken: string, req: IncomingMessage, res:
     if (pathname === '/mcp' && method === 'POST') {
       const out = handleMcp(forge, origin, body.toString('utf8'));
       if (out.body === null) {
-        res.writeHead(out.status, { 'x-github-request-id': `req-${randomUUID()}` });
+        res.writeHead(out.status, { 'x-github-request-id': requestId() });
         res.end();
         return;
       }

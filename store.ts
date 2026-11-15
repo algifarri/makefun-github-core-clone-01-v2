@@ -366,7 +366,26 @@ export class Forge {
 
   isAncestor(repo: Repo, ancestor: string, descendant: string): boolean {
     if (ancestor === descendant) return true;
-    return this.reachableCommits(repo, descendant).has(this.peelToCommit(repo, ancestor));
+    const target = this.peelToCommit(repo, ancestor);
+    // Reachability with an early exit: walk the descendant's history and
+    // stop the moment the target commit is met, instead of collecting
+    // every reachable commit first. The answer is the same membership
+    // question reachableCommits answers, asked lazily — a fast-forward
+    // check (the receive-pack hot path) finds its answer in a step or
+    // two instead of a full-history walk per push.
+    const seen = new Set<string>();
+    const stack: string[] = [this.peelToCommit(repo, descendant)];
+    while (stack.length > 0) {
+      const oid = stack.pop()!;
+      if (seen.has(oid)) continue;
+      seen.add(oid);
+      const obj = repo.objects.get(oid);
+      if (obj === undefined || obj.type !== 'commit') continue;
+      if (oid === target) return true;
+      const view = parseCommit(obj.data);
+      for (let i = view.parents.length - 1; i >= 0; i -= 1) stack.push(view.parents[i]!);
+    }
+    return false;
   }
 
   /** The nearest common ancestor of two commits, or null when unrelated. */
