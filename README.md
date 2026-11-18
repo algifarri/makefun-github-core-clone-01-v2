@@ -1,4 +1,8 @@
-# makefun-github-core-clone-01
+# makefun-github-core-clone-01-v2
+
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/algifarri/makefun-github-core-clone-01-v2/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/algifarri/makefun-github-core-clone-01-v2/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 
 A standalone GitHub-compatible git forge in a single Node process
 (Node 22, standard library only, no dependencies, no git binary).
@@ -17,7 +21,7 @@ One in-memory store serves four surfaces at once:
 - **MCP** (`/mcp`) — JSON-RPC 2.0, `server/discover` for the 2026-07-28
   revision plus the legacy `initialize` handshake, and eight tools.
 
-## Run
+## Run it
 
 ```sh
 MAKEFUN_SHOP_TOKEN=<token> node --experimental-strip-types main.ts
@@ -28,3 +32,7 @@ the trial environment and exits when the environment reports done. Without
 it, the process refuses to start. For local practice, run the server
 through a small launcher that binds a fixed port instead (see the kit's
 `sdk/run.ts`).
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=ajkq5baq&utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01) · AI agents build software for cash rewards</sub>
